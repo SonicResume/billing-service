@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, HTTPException
 import stripe
 import os
 import json
+import base64
 import firebase_admin
 from dotenv import load_dotenv
 from firebase_admin import credentials, firestore
@@ -19,12 +20,12 @@ WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 # -----------------------------
 # FIREBASE INIT (PRODUCTION SAFE)
 # -----------------------------
-firebase_json_str = os.getenv("FIREBASE_KEY")
+firebase_b64 = os.getenv("FIREBASE_KEY_B64")
 
-if not firebase_json_str:
-    raise Exception("FIREBASE_KEY env variable missing")
+if not firebase_b64:
+    raise Exception("FIREBASE_KEY_B64 missing")
 
-firebase_json = json.loads(firebase_json_str)
+firebase_json = json.loads(base64.b64decode(firebase_b64))
 
 cred = credentials.Certificate(firebase_json)
 
@@ -43,26 +44,14 @@ PRICE_MAP = {
 }
 
 # -----------------------------
-# ROOT
+# ROOT TEST ROUTE
 # -----------------------------
 @app.get("/")
 def root():
     return {"status": "billing service running"}
 
 # -----------------------------
-# IDEMPOTENCY (avoid double charges)
-# -----------------------------
-def already_processed(event_id: str) -> bool:
-    doc = db.collection("stripe_events").document(event_id).get()
-    return doc.exists
-
-def mark_processed(event_id: str):
-    db.collection("stripe_events").document(event_id).set({
-        "processed": True
-    })
-
-# -----------------------------
-# USER HELPERS
+# HELPERS
 # -----------------------------
 def get_user_ref(email: str):
     docs = db.collection("users").where("email", "==", email).stream()
@@ -75,10 +64,7 @@ def set_user(email: str, data: dict):
     if not ref:
         ref = db.collection("users").document()
 
-    ref.set({
-        "email": email,
-        **data
-    }, merge=True)
+    ref.set({"email": email, **data}, merge=True)
 
 def add_credits(email: str, credits: int):
     ref = get_user_ref(email)
@@ -90,9 +76,6 @@ def add_credits(email: str, credits: int):
         "credits": firestore.Increment(credits)
     }, merge=True)
 
-# -----------------------------
-# EMAIL RESOLVER
-# -----------------------------
 def get_email(session):
     email = session.get("customer_details", {}).get("email")
 
@@ -124,16 +107,10 @@ async def stripe_webhook(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    event_id = event["id"]
-
-    # prevent duplicate processing
-    if already_processed(event_id):
-        return {"status": "already processed"}
-
     event_type = event["type"]
 
     # -----------------------------
-    # CHECKOUT COMPLETE
+    # PAYMENT SUCCESS
     # -----------------------------
     if event_type == "checkout.session.completed":
 
@@ -142,20 +119,15 @@ async def stripe_webhook(request: Request):
 
         price_id = session.get("metadata", {}).get("price_id")
 
-        if price_id in PRICE_MAP:
+        if email and price_id in PRICE_MAP:
             plan, credits = PRICE_MAP[price_id]
 
-            if email:
-                set_user(email, {
-                    "plan": plan
-                })
+            set_user(email, {"plan": plan})
 
-                if credits > 0 and plan != "premium":
-                    add_credits(email, credits)
+            if plan != "premium":
+                add_credits(email, credits)
 
-                mark_processed(event_id)
-
-                print("🔥 PAYMENT SUCCESS:", email, plan, credits)
+            print("🔥 PAYMENT SUCCESS:", email, plan, credits)
 
     # -----------------------------
     # RENEWALS
@@ -175,12 +147,10 @@ async def stripe_webhook(request: Request):
             if plan != "premium":
                 add_credits(email, PRICE_MAP.get(plan, ("", 0))[1])
 
-            mark_processed(event_id)
-
             print("💰 RENEWAL:", email, plan)
 
     # -----------------------------
-    # CANCELLATION
+    # CANCEL
     # -----------------------------
     elif event_type == "customer.subscription.deleted":
 
@@ -190,8 +160,6 @@ async def stripe_webhook(request: Request):
 
         if email:
             set_user(email, {"plan": "free"})
-            mark_processed(event_id)
-
             print("❌ CANCELLED:", email)
 
     return {"ok": True}
