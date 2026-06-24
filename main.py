@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException
 import stripe
 import os
+import json
 import firebase_admin
 from dotenv import load_dotenv
 from firebase_admin import credentials, firestore
@@ -16,10 +17,16 @@ stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 # -----------------------------
-# FIREBASE INIT
+# FIREBASE INIT (PRODUCTION SAFE)
 # -----------------------------
-cred = credentials.Certificate("serviceAccountKey.json")
-firebase_admin.initialize_app(cred)
+firebase_json_str = os.getenv("FIREBASE_KEY")
+
+if not firebase_json_str:
+    raise Exception("FIREBASE_KEY env variable missing")
+
+firebase_json = json.loads(firebase_json_str)
+
+cred = credentials.Certificate(firebase_json)
 
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
@@ -27,7 +34,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # -----------------------------
-# PRICE → PLAN MAP (SOURCE OF TRUTH)
+# PRICE MAP (Stripe Price IDs → Plan + Credits)
 # -----------------------------
 PRICE_MAP = {
     "price_1ThsIOPE4wCsfg73Om6UdO0C": ("pro", 150),
@@ -43,7 +50,7 @@ def root():
     return {"status": "billing service running"}
 
 # -----------------------------
-# IDEMPOTENCY
+# IDEMPOTENCY (avoid double charges)
 # -----------------------------
 def already_processed(event_id: str) -> bool:
     doc = db.collection("stripe_events").document(event_id).get()
@@ -63,6 +70,16 @@ def get_user_ref(email: str):
         return d.reference
     return None
 
+def set_user(email: str, data: dict):
+    ref = get_user_ref(email)
+    if not ref:
+        ref = db.collection("users").document()
+
+    ref.set({
+        "email": email,
+        **data
+    }, merge=True)
+
 def add_credits(email: str, credits: int):
     ref = get_user_ref(email)
     if not ref:
@@ -73,26 +90,15 @@ def add_credits(email: str, credits: int):
         "credits": firestore.Increment(credits)
     }, merge=True)
 
-def set_plan(email: str, plan: str):
-    ref = get_user_ref(email)
-    if not ref:
-        ref = db.collection("users").document()
-
-    ref.set({
-        "email": email,
-        "plan": plan
-    }, merge=True)
-
 # -----------------------------
 # EMAIL RESOLVER
 # -----------------------------
-def get_email_from_session(session):
+def get_email(session):
     email = session.get("customer_details", {}).get("email")
 
     if email:
         return email
 
-    # fallback
     customer_id = session.get("customer")
     if customer_id:
         customer = stripe.Customer.retrieve(customer_id)
@@ -120,7 +126,7 @@ async def stripe_webhook(request: Request):
 
     event_id = event["id"]
 
-    # prevent duplicates
+    # prevent duplicate processing
     if already_processed(event_id):
         return {"status": "already processed"}
 
@@ -132,36 +138,27 @@ async def stripe_webhook(request: Request):
     if event_type == "checkout.session.completed":
 
         session = event["data"]["object"]
+        email = get_email(session)
 
-        email = get_email_from_session(session)
-
-        # SAFE: derive from PRICE, not metadata
-        line_items = session.get("display_items", []) or session.get("line_items")
-
-        price_id = None
-        try:
-            price_id = session["metadata"]["price_id"]
-        except:
-            pass
-
-        plan = None
-        credits = 0
+        price_id = session.get("metadata", {}).get("price_id")
 
         if price_id in PRICE_MAP:
             plan, credits = PRICE_MAP[price_id]
 
-        if email and plan:
-            set_plan(email, plan)
+            if email:
+                set_user(email, {
+                    "plan": plan
+                })
 
-            if credits > 0 and plan != "premium":
-                add_credits(email, credits)
+                if credits > 0 and plan != "premium":
+                    add_credits(email, credits)
 
-            mark_processed(event_id)
+                mark_processed(event_id)
 
-            print("🔥 PAYMENT SUCCESS:", email, plan, credits)
+                print("🔥 PAYMENT SUCCESS:", email, plan, credits)
 
     # -----------------------------
-    # SUBSCRIPTION RENEWAL
+    # RENEWALS
     # -----------------------------
     elif event_type == "invoice.paid":
 
@@ -173,7 +170,7 @@ async def stripe_webhook(request: Request):
         plan = invoice.get("metadata", {}).get("plan")
 
         if email and plan:
-            set_plan(email, plan)
+            set_user(email, {"plan": plan})
 
             if plan != "premium":
                 add_credits(email, PRICE_MAP.get(plan, ("", 0))[1])
@@ -183,7 +180,7 @@ async def stripe_webhook(request: Request):
             print("💰 RENEWAL:", email, plan)
 
     # -----------------------------
-    # CANCELLED
+    # CANCELLATION
     # -----------------------------
     elif event_type == "customer.subscription.deleted":
 
@@ -192,7 +189,7 @@ async def stripe_webhook(request: Request):
         email = customer.get("email")
 
         if email:
-            set_plan(email, "free")
+            set_user(email, {"plan": "free"})
             mark_processed(event_id)
 
             print("❌ CANCELLED:", email)
