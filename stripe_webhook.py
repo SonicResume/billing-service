@@ -22,19 +22,56 @@ async def stripe_webhook(request: Request):
             sig,
             STRIPE_WEBHOOK_SECRET
         )
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Webhook verification failed: {str(e)}"
+        )
+
 
     if event["type"] == "checkout.session.completed":
+
         session = event["data"]["object"]
 
-        email = session.get("customer_details", {}).get("email")
-        plan = session.get("metadata", {}).get("plan", "pro")
+        email = (
+            session.get("customer_details", {}).get("email")
+            or session.get("customer_email")
+        )
 
-        if email:
-            apply_plan(db, email, plan)
+        metadata = session.get("metadata", {})
 
+        plan = metadata.get("plan")
+        app_name = metadata.get("app", "noah-language")
+
+
+        if not email:
+            print("❌ No customer email found")
+            return {"ok": True}
+
+
+        if not plan:
+            print("❌ Missing plan metadata")
+            return {"ok": True}
+
+
+        success = apply_plan(
+            db,
+            email,
+            plan
+        )
+
+
+        if success:
             print("💰 PAYMENT SUCCESS")
-            print(email, plan)
+            print("APP:", app_name)
+            print("EMAIL:", email)
+            print("PLAN:", plan)
 
-    return {"ok": True}
+        else:
+            print("⚠️ Payment received but user not found")
+
+
+    return {
+        "ok": True
+    }
