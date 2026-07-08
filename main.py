@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException
 import stripe
 import os
+import json
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -16,7 +17,9 @@ app = FastAPI()
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
-cred = credentials.Certificate("serviceAccountKey.json")
+firebase_key = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+
+cred = credentials.Certificate(json.loads(firebase_key))
 
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
