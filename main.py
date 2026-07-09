@@ -63,7 +63,7 @@ db = firestore.client()
 # -----------------------------
 PRICE_MAP = {
 
-    "price_1TbF9BPE4wCsfg732ScUJfmc": {
+    "price_1TbF9BPE4wCsfg732ScUJfm": {
         "plan": "pro",
         "credits": 150
     },
