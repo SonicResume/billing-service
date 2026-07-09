@@ -157,15 +157,12 @@ def save_event(event_id):
 # -----------------------------
 # STRIPE WEBHOOK
 # -----------------------------
-
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
 
     payload = await request.body()
 
-    signature = request.headers.get(
-        "stripe-signature"
-    )
+    signature = request.headers.get("stripe-signature")
 
     try:
         event = stripe.Webhook.construct_event(
@@ -181,7 +178,7 @@ async def stripe_webhook(request: Request):
         )
 
 
-    event_id = event["id"]
+    event_id = event.id
 
 
     if event_exists(event_id):
@@ -190,45 +187,53 @@ async def stripe_webhook(request: Request):
         }
 
 
-    event_type = event["type"]
+    event_type = event.type
 
 
     if event_type == "checkout.session.completed":
 
-        print("PAYMENT COMPLETED")
+        session = event.data.object
 
-        session = event["data"]["object"]
-
-        print("SESSION:", session)
-
-
-        email = (
 
         email = None
 
         if session.customer_details:
-        email = session.customer_details.email
+            email = session.customer_details.email
 
         if not email:
-        email = session.customer_email
+            email = session.customer_email
 
 
         metadata = session.metadata or {}
 
         price_id = metadata.get("price_id")
 
-        if email and price_id in PRICE_MAP:
 
-            plan_data = PRICE_MAP[price_id]
-
-            update_user_plan(
-                email,
-                plan_data["plan"],
-                plan_data["credits"]
-            )
+        if not email or not price_id:
+            save_event(event_id)
+            return {
+                "error": "missing payment data"
+            }
 
 
-        save_event(event_id)
+        if price_id not in PRICE_MAP:
+            save_event(event_id)
+            return {
+                "error": "unknown price"
+            }
+
+
+        plan_data = PRICE_MAP[price_id]
+
+
+        update_user_plan(
+            email,
+            plan_data["plan"],
+            plan_data["credits"]
+        )
+
+
+    save_event(event_id)
 
 
     return {
