@@ -202,14 +202,16 @@ async def stripe_webhook(request: Request):
 
         session = event["data"]["object"]
 
-        email = None
 
-        if session.customer_details:
-            email = session.customer_details.email
+     email = None
 
-        if not email:
-            email = session.customer_email
+customer_details = session.get("customer_details")
 
+if customer_details:
+    email = customer_details.get("email")
+
+if not email:
+    email = session.get("customer_email")
         metadata = dict(session.metadata)
 
         price_id = metadata.get("price_id")
