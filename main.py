@@ -182,44 +182,17 @@ async def stripe_webhook(request: Request):
 
     event_type = event["type"]
 
-    if event_type == "checkout.session.completed":
+if event_type == "checkout.session.completed":
 
-        session = event["data"]["object"]
+    print("PAYMENT COMPLETED")
+    print(event["data"]["object"])
 
-        email = (
-            session
-            .get("customer_details", {})
-            .get("email")
-            or session.get("customer_email")
-        )
+    save_event(event_id)
 
-        metadata = session.get(
-            "metadata",
-            {}
-        )
+return {
+    "ok": True
+}
 
-        price_id = metadata.get(
-            "price_id"
-        )
-
-        if not email or price_id not in PRICE_MAP:
-            return {
-                "error": "missing payment data"
-            }
-
-        plan_data = PRICE_MAP[price_id]
-
-        update_user_plan(
-            email,
-            plan_data["plan"],
-            plan_data["credits"]
-        )
-
-        save_event(event_id)
-
-    return {
-        "ok": True
-    }
 # -----------------------------
 # CREATE CHECKOUT
 # -----------------------------
