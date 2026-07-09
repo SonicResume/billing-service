@@ -33,7 +33,7 @@ try:
     firebase_credentials = json.loads(firebase_key)
 except json.JSONDecodeError:
     raise RuntimeError(
-        "FIREBASE_SERVICE_ACCOUNT is not valid JSON"
+        "FIREBASE_SERVICE_ACCOUNT must be valid JSON"
     )
 
 
@@ -41,21 +41,25 @@ if not firebase_admin._apps:
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 
+
 db = firestore.client()
 
 
 # -----------------------------
-# PLAN SYSTEM
+# PLANS
 # -----------------------------
 PRICE_MAP = {
-    "price_1ThsIOPE4wCsfg73Om6UdO0C": {
+
+    "price_1TbF9BPE4wCsfg732ScUJfmc": {
         "plan": "pro",
         "credits": 150
     },
-    "price_1TI27QPE4wCsfg73kGgLgKI4": {
+
+    "price_1TnzrFPE4wCsfg73xSOMZNuH": {
         "plan": "business",
         "credits": 500
     },
+
     "price_1TGwAJPE4wCsfg73gMQlv8Ph": {
         "plan": "premium",
         "credits": 999999
@@ -85,28 +89,28 @@ def health():
 # PRICES
 # -----------------------------
 @app.get("/prices")
-def get_prices():
+def prices():
     return PRICE_MAP
 
 
 # -----------------------------
 # FIRESTORE HELPERS
 # -----------------------------
-def get_user_ref(email: str):
+def get_user_ref(email):
 
-    docs = (
+    users = (
         db.collection("users")
         .where("email", "==", email)
         .stream()
     )
 
-    for doc in docs:
-        return doc.reference
+    for user in users:
+        return user.reference
 
     return db.collection("users").document()
 
 
-def set_plan(email: str, plan: str):
+def update_user_plan(email, plan, credits):
 
     ref = get_user_ref(email)
 
@@ -114,43 +118,30 @@ def set_plan(email: str, plan: str):
         {
             "email": email,
             "plan": plan,
+            "credits": credits,
             "updatedAt": firestore.SERVER_TIMESTAMP
         },
         merge=True
     )
 
 
-def add_credits(email: str, credits: int):
-
-    ref = get_user_ref(email)
-
-    ref.set(
-        {
-            "email": email,
-            "credits": firestore.Increment(credits),
-            "updatedAt": firestore.SERVER_TIMESTAMP
-        },
-        merge=True
-    )
-
-
-def mark_event(event_id: str):
-
-    db.collection("stripe_events").document(event_id).set(
-        {
-            "done": True,
-            "createdAt": firestore.SERVER_TIMESTAMP
-        }
-    )
-
-
-def event_done(event_id: str):
+def event_exists(event_id):
 
     return (
         db.collection("stripe_events")
         .document(event_id)
         .get()
         .exists
+    )
+
+
+def save_event(event_id):
+
+    db.collection("stripe_events").document(event_id).set(
+        {
+            "done": True,
+            "createdAt": firestore.SERVER_TIMESTAMP
+        }
     )
 
 
@@ -162,18 +153,21 @@ async def stripe_webhook(request: Request):
 
     payload = await request.body()
 
-    sig = request.headers.get(
+    signature = request.headers.get(
         "stripe-signature"
     )
 
+
     try:
+
         event = stripe.Webhook.construct_event(
             payload,
-            sig,
+            signature,
             WEBHOOK_SECRET
         )
 
     except Exception as e:
+
         raise HTTPException(
             status_code=400,
             detail=str(e)
@@ -183,114 +177,61 @@ async def stripe_webhook(request: Request):
     event_id = event["id"]
 
 
-    if event_done(event_id):
+    if event_exists(event_id):
+
         return {
-            "status": "duplicate ignored"
+            "status": "duplicate"
         }
 
 
     event_type = event["type"]
 
 
-    # PAYMENT COMPLETE
+    # PAYMENT SUCCESS
     if event_type == "checkout.session.completed":
+
 
         session = event["data"]["object"]
 
+
         email = (
-            session.get("customer_details", {}).get("email")
+            session
+            .get("customer_details", {})
+            .get("email")
             or session.get("customer_email")
         )
 
-        metadata = session.get("metadata") or {}
+
+        metadata = session.get(
+            "metadata",
+            {}
+        )
+
 
         price_id = metadata.get(
             "price_id"
         )
 
 
-        if not email or not price_id:
-            return {
-                "error": "missing data"
-            }
+        if not email or price_id not in PRICE_MAP:
 
-
-        if price_id not in PRICE_MAP:
             return {
-                "error": "invalid price_id"
+                "error": "missing payment data"
             }
 
 
         plan_data = PRICE_MAP[price_id]
 
 
-        set_plan(
+        update_user_plan(
             email,
-            plan_data["plan"]
-        )
-
-
-        add_credits(
-            email,
+            plan_data["plan"],
             plan_data["credits"]
         )
 
 
-        mark_event(event_id)
+        save_event(event_id)
 
-
-    # SUBSCRIPTION RENEWAL
-    elif event_type == "invoice.paid":
-
-        invoice = event["data"]["object"]
-
-        customer = stripe.Customer.retrieve(
-            invoice["customer"]
-        )
-
-        email = customer.get(
-            "email"
-        )
-
-        plan = (
-            invoice.get("metadata") or {}
-        ).get(
-            "plan"
-        )
-
-
-        if email and plan:
-
-            set_plan(
-                email,
-                plan
-            )
-
-            mark_event(event_id)
-
-
-    # CANCEL SUBSCRIPTION
-    elif event_type == "customer.subscription.deleted":
-
-        subscription = event["data"]["object"]
-
-        customer = stripe.Customer.retrieve(
-            subscription["customer"]
-        )
-
-        email = customer.get(
-            "email"
-        )
-
-
-        if email:
-
-            set_plan(
-                email,
-                "free"
-            )
-
-            mark_event(event_id)
 
 
     return {
@@ -298,13 +239,16 @@ async def stripe_webhook(request: Request):
     }
 
 
+
 # -----------------------------
-# CHECKOUT
+# CREATE CHECKOUT
 # -----------------------------
 @app.post("/create-checkout")
 async def create_checkout(request: Request):
 
+
     data = await request.json()
+
 
     price_id = data.get(
         "price_id"
@@ -316,6 +260,7 @@ async def create_checkout(request: Request):
 
 
     if not price_id or not email:
+
         raise HTTPException(
             status_code=400,
             detail="missing data"
@@ -323,16 +268,15 @@ async def create_checkout(request: Request):
 
 
     if price_id not in PRICE_MAP:
+
         raise HTTPException(
             status_code=400,
-            detail="invalid price_id"
+            detail="invalid price"
         )
 
 
-    plan = PRICE_MAP[price_id]["plan"]
-
-
     session = stripe.checkout.Session.create(
+
         mode="payment",
 
         payment_method_types=[
@@ -350,17 +294,16 @@ async def create_checkout(request: Request):
 
         metadata={
             "price_id": price_id,
-            "plan": plan
+            "plan": PRICE_MAP[price_id]["plan"]
         },
 
-        success_url=(
-            "https://noah-language.vercel.app/"
-            "success?session_id={CHECKOUT_SESSION_ID}"
-        ),
 
-        cancel_url=(
-            "https://noah-language.vercel.app/pricing"
-        )
+        success_url=
+        "https://noah-language.vercel.app/success",
+
+        cancel_url=
+        "https://noah-language.vercel.app/pricing"
+
     )
 
 
@@ -369,25 +312,32 @@ async def create_checkout(request: Request):
     }
 
 
+
 # -----------------------------
 # USER STATUS
 # -----------------------------
 @app.get("/user/{email}")
-def get_user_status(email: str):
+def user_status(email: str):
 
-    docs = (
+
+    users = (
         db.collection("users")
         .where("email", "==", email)
         .stream()
     )
 
 
-    for doc in docs:
-        return doc.to_dict()
+    for user in users:
+
+        return user.to_dict()
 
 
     return {
+
         "email": email,
+
         "plan": "free",
+
         "credits": 0
+
     }
