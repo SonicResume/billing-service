@@ -7,6 +7,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
 
+
 # -----------------------------
 # INIT
 # -----------------------------
@@ -17,17 +18,34 @@ app = FastAPI()
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
-firebase_key = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
 
-cred = credentials.Certificate(json.loads(firebase_key))
+# -----------------------------
+# FIREBASE INIT
+# -----------------------------
+firebase_key = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+
+if not firebase_key:
+    raise RuntimeError(
+        "Missing FIREBASE_SERVICE_ACCOUNT environment variable"
+    )
+
+try:
+    firebase_credentials = json.loads(firebase_key)
+except json.JSONDecodeError:
+    raise RuntimeError(
+        "FIREBASE_SERVICE_ACCOUNT is not valid JSON"
+    )
+
 
 if not firebase_admin._apps:
+    cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
+
 # -----------------------------
-# PLAN SYSTEM (UNIFIED)
+# PLAN SYSTEM
 # -----------------------------
 PRICE_MAP = {
     "price_1ThsIOPE4wCsfg73Om6UdO0C": {
@@ -43,75 +61,139 @@ PRICE_MAP = {
         "credits": 999999
     }
 }
+
+
 # -----------------------------
-# HEALTH CHECK
+# HEALTH
 # -----------------------------
 @app.get("/")
 def root():
-    return {"status": "billing service running"}
+    return {
+        "status": "billing service running"
+    }
+
+
+@app.get("/api/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "billing-service"
+    }
+
 
 # -----------------------------
-# PRICES (ALL APPS USE THIS)
+# PRICES
 # -----------------------------
 @app.get("/prices")
 def get_prices():
     return PRICE_MAP
 
+
 # -----------------------------
-# USER HELPERS
+# FIRESTORE HELPERS
 # -----------------------------
 def get_user_ref(email: str):
-    docs = db.collection("users").where("email", "==", email).stream()
+
+    docs = (
+        db.collection("users")
+        .where("email", "==", email)
+        .stream()
+    )
 
     for doc in docs:
         return doc.reference
 
     return db.collection("users").document()
 
+
 def set_plan(email: str, plan: str):
+
     ref = get_user_ref(email)
-    ref.set({"email": email, "plan": plan}, merge=True)
+
+    ref.set(
+        {
+            "email": email,
+            "plan": plan,
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        },
+        merge=True
+    )
+
 
 def add_credits(email: str, credits: int):
+
     ref = get_user_ref(email)
-    ref.set({
-        "email": email,
-        "credits": firestore.Increment(credits)
-    }, merge=True)
+
+    ref.set(
+        {
+            "email": email,
+            "credits": firestore.Increment(credits),
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        },
+        merge=True
+    )
+
 
 def mark_event(event_id: str):
-    db.collection("stripe_events").document(event_id).set({"done": True})
+
+    db.collection("stripe_events").document(event_id).set(
+        {
+            "done": True,
+            "createdAt": firestore.SERVER_TIMESTAMP
+        }
+    )
+
 
 def event_done(event_id: str):
-    return db.collection("stripe_events").document(event_id).get().exists
+
+    return (
+        db.collection("stripe_events")
+        .document(event_id)
+        .get()
+        .exists
+    )
+
 
 # -----------------------------
-# STRIPE WEBHOOK (UNIFIED CORE)
+# STRIPE WEBHOOK
 # -----------------------------
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
 
     payload = await request.body()
-    sig = request.headers.get("stripe-signature")
+
+    signature = request.headers.get(
+        "stripe-signature"
+    )
 
     try:
         event = stripe.Webhook.construct_event(
             payload,
-            sig,
+            signature,
             WEBHOOK_SECRET
         )
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
 
     event_id = event["id"]
 
+
     if event_done(event_id):
-        return {"status": "duplicate ignored"}
+        return {
+            "status": "duplicate ignored"
+        }
+
 
     event_type = event["type"]
 
+
     # -------------------------
-    # PAYMENT COMPLETED
+    # PAYMENT COMPLETE
     # -------------------------
     if event_type == "checkout.session.completed":
 
@@ -122,107 +204,203 @@ async def stripe_webhook(request: Request):
             or session.get("customer_email")
         )
 
+
         metadata = session.get("metadata") or {}
-        price_id = metadata.get("price_id")
+
+        price_id = metadata.get(
+            "price_id"
+        )
+
 
         if not email or not price_id:
-            return {"error": "missing data"}
+            return {
+                "error": "missing data"
+            }
+
 
         if price_id not in PRICE_MAP:
-            return {"error": "invalid price_id"}
+            return {
+                "error": "invalid price"
+            }
+
 
         plan_data = PRICE_MAP[price_id]
-        plan = plan_data["plan"]
-        credits = plan_data["credits"]
 
-        set_plan(email, plan)
+        set_plan(
+            email,
+            plan_data["plan"]
+        )
 
-        if credits > 0:
-            add_credits(email, credits)
+
+        add_credits(
+            email,
+            plan_data["credits"]
+        )
+
 
         mark_event(event_id)
 
+
     # -------------------------
-    # SUBSCRIPTION RENEWAL
+    # RENEWAL
     # -------------------------
     elif event_type == "invoice.paid":
 
         invoice = event["data"]["object"]
 
-        customer = stripe.Customer.retrieve(invoice["customer"])
-        email = customer.get("email")
+        customer = stripe.Customer.retrieve(
+            invoice["customer"]
+        )
 
-        plan = invoice.get("metadata", {}).get("plan")
+        email = customer.get(
+            "email"
+        )
+
+
+        metadata = invoice.get(
+            "metadata",
+            {}
+        )
+
+        plan = metadata.get(
+            "plan"
+        )
+
 
         if email and plan:
-            set_plan(email, plan)
+
+            set_plan(
+                email,
+                plan
+            )
+
             mark_event(event_id)
 
+
     # -------------------------
-    # CANCEL SUBSCRIPTION
+    # CANCEL
     # -------------------------
     elif event_type == "customer.subscription.deleted":
 
-        sub = event["data"]["object"]
+        subscription = event["data"]["object"]
 
-        customer = stripe.Customer.retrieve(sub["customer"])
-        email = customer.get("email")
+        customer = stripe.Customer.retrieve(
+            subscription["customer"]
+        )
+
+        email = customer.get(
+            "email"
+        )
+
 
         if email:
-            set_plan(email, "free")
+
+            set_plan(
+                email,
+                "free"
+            )
+
             mark_event(event_id)
 
-    return {"ok": True}
+
+    return {
+        "ok": True
+    }
+
+
 
 # -----------------------------
-# CHECKOUT (USED BY ALL APPS)
+# CHECKOUT
 # -----------------------------
 @app.post("/create-checkout")
 async def create_checkout(request: Request):
 
     data = await request.json()
 
-    price_id = data.get("price_id")
-    email = data.get("email")
-
-    if not price_id or not email:
-        raise HTTPException(status_code=400, detail="missing data")
-
-    session = stripe.checkout.Session.create(
-        mode="payment",
-        payment_method_types=["card"],
-        line_items=[{
-            "price": price_id,
-            "quantity": 1
-        }],
-        success_url="https://noah-language.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url="https://noah-language.vercel.app/pricing",
-        customer_email=email,
-        metadata={"price_id": price_id}
+    price_id = data.get(
+        "price_id"
     )
 
-    return {"url": session.url}
+    email = data.get(
+        "email"
+    )
+
+
+    if not price_id or not email:
+        raise HTTPException(
+            status_code=400,
+            detail="missing data"
+        )
+
+
+    if price_id not in PRICE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail="invalid price"
+        )
+
+
+    plan = PRICE_MAP[price_id]["plan"]
+
+
+    session = stripe.checkout.Session.create(
+
+        mode="payment",
+
+        payment_method_types=[
+            "card"
+        ],
+
+        line_items=[
+            {
+                "price": price_id,
+                "quantity": 1
+            }
+        ],
+
+        customer_email=email,
+
+        metadata={
+            "price_id": price_id,
+            "plan": plan
+        },
+
+        success_url=(
+            "https://noah-language.vercel.app/"
+            "success?session_id={CHECKOUT_SESSION_ID}"
+        ),
+
+        cancel_url=(
+            "https://noah-language.vercel.app/pricing"
+        )
+    )
+
+
+    return {
+        "url": session.url
+    }
+
+
 
 # -----------------------------
-# USER STATUS (USED BY ALL APPS)
+# USER STATUS
 # -----------------------------
 @app.get("/user/{email}")
 def get_user_status(email: str):
 
-    docs = db.collection("users").where("email", "==", email).stream()
+    docs = (
+        db.collection("users")
+        .where("email", "==", email)
+        .stream()
+    )
+
 
     for doc in docs:
         return doc.to_dict()
+
 
     return {
         "email": email,
         "plan": "free",
         "credits": 0
-    }
-
-@app.get("/api/health")
-def health():
-    return {
-        "status": "ok",
-        "service": "billing-service"
     }
