@@ -325,6 +325,58 @@ async def create_checkout(request: Request):
     }
 
 
+# -----------------------------
+# CREATE CHECKOUT SESSION
+# -----------------------------
+@app.post("/")
+async def create_checkout(request: Request):
+
+    data = await request.json()
+
+    price_id = data.get("price_id")
+    email = data.get("email")
+
+    if not price_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing price_id"
+        )
+
+    if price_id not in PRICE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid price"
+        )
+
+    try:
+
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer_email=email,
+            line_items=[
+                {
+                    "price": price_id,
+                    "quantity": 1,
+                }
+            ],
+            success_url="https://noah-language.vercel.app/success",
+            cancel_url="https://noah-language.vercel.app/pricing",
+            metadata={
+                "plan": PRICE_MAP[price_id]["plan"],
+                "email": email
+            }
+        )
+
+        return {
+            "url": session.url
+        }
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 # -----------------------------
 # USER STATUS
