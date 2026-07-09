@@ -157,6 +157,7 @@ def save_event(event_id):
 # -----------------------------
 # STRIPE WEBHOOK
 # -----------------------------
+
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
 
@@ -166,55 +167,40 @@ async def stripe_webhook(request: Request):
         "stripe-signature"
     )
 
-
-    try:
-
-        event = stripe.Webhook.construct_event(
-            payload,
-            signature,
-            WEBHOOK_SECRET
-        )
-
-    except Exception as e:
-
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
+    event = stripe.Webhook.construct_event(
+        payload,
+        signature,
+        WEBHOOK_SECRET
+    )
 
     event_id = event["id"]
 
-
     if event_exists(event_id):
-
         return {
             "status": "duplicate"
         }
 
-
     event_type = event["type"]
-
-
-    # PAYMENT SUCCESS
 
     if event_type == "checkout.session.completed":
 
         session = event["data"]["object"]
 
+        email = (
+            session
+            .get("customer_details", {})
+            .get("email")
+            or session.get("customer_email")
+        )
 
-     email = None
+        metadata = session.get(
+            "metadata",
+            {}
+        )
 
-customer_details = session.get("customer_details")
-
-if customer_details:
-    email = customer_details.get("email")
-
-if not email:
-    email = session.get("customer_email")
-        metadata = dict(session.metadata)
-
-        price_id = metadata.get("price_id")
+        price_id = metadata.get(
+            "price_id"
+        )
 
         if not email or price_id not in PRICE_MAP:
             return {
@@ -234,7 +220,6 @@ if not email:
     return {
         "ok": True
     }
-
 # -----------------------------
 # CREATE CHECKOUT
 # -----------------------------
