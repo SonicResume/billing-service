@@ -290,7 +290,7 @@ async def create_checkout(request: Request):
 
     session = stripe.checkout.Session.create(
 
-        mode="payment",
+        mode="subscription",
 
         payment_method_types=[
             "card"
