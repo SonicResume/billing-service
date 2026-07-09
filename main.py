@@ -153,7 +153,6 @@ def save_event(event_id):
         }
     )
 
-
 # -----------------------------
 # STRIPE WEBHOOK
 # -----------------------------
@@ -161,7 +160,6 @@ def save_event(event_id):
 async def stripe_webhook(request: Request):
 
     payload = await request.body()
-
     signature = request.headers.get("stripe-signature")
 
     try:
@@ -187,10 +185,7 @@ async def stripe_webhook(request: Request):
         }
 
 
-    event_type = event.type
-
-
-    if event_type == "checkout.session.completed":
+    if event.type == "checkout.session.completed":
 
         session = event.data.object
 
@@ -209,28 +204,16 @@ async def stripe_webhook(request: Request):
         price_id = metadata.get("price_id")
 
 
-        if not email or not price_id:
-            save_event(event_id)
-            return {
-                "error": "missing payment data"
-            }
+        if email and price_id in PRICE_MAP:
+
+            plan_data = PRICE_MAP[price_id]
 
 
-        if price_id not in PRICE_MAP:
-            save_event(event_id)
-            return {
-                "error": "unknown price"
-            }
-
-
-        plan_data = PRICE_MAP[price_id]
-
-
-        update_user_plan(
-            email,
-            plan_data["plan"],
-            plan_data["credits"]
-        )
+            update_user_plan(
+                email,
+                plan_data["plan"],
+                plan_data["credits"]
+            )
 
 
     save_event(event_id)
