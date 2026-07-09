@@ -203,21 +203,19 @@ async def stripe_webhook(request: Request):
 
 
         email = (
-            session.get("customer_details", {}).get("email")
-            or session.get("customer_email")
-        )
+
+        email = None
+
+        if session.customer_details:
+        email = session.customer_details.email
+
+        if not email:
+        email = session.customer_email
 
 
-        metadata = session.get(
-            "metadata",
-            {}
-        )
+        metadata = session.metadata or {}
 
-
-        price_id = metadata.get(
-            "price_id"
-        )
-
+        price_id = metadata.get("price_id")
 
         if email and price_id in PRICE_MAP:
 
