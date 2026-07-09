@@ -162,14 +162,14 @@ async def stripe_webhook(request: Request):
 
     payload = await request.body()
 
-    signature = request.headers.get(
+    sig = request.headers.get(
         "stripe-signature"
     )
 
     try:
         event = stripe.Webhook.construct_event(
             payload,
-            signature,
+            sig,
             WEBHOOK_SECRET
         )
 
@@ -192,9 +192,7 @@ async def stripe_webhook(request: Request):
     event_type = event["type"]
 
 
-    # -------------------------
     # PAYMENT COMPLETE
-    # -------------------------
     if event_type == "checkout.session.completed":
 
         session = event["data"]["object"]
@@ -203,7 +201,6 @@ async def stripe_webhook(request: Request):
             session.get("customer_details", {}).get("email")
             or session.get("customer_email")
         )
-
 
         metadata = session.get("metadata") or {}
 
@@ -220,11 +217,12 @@ async def stripe_webhook(request: Request):
 
         if price_id not in PRICE_MAP:
             return {
-                "error": "invalid price"
+                "error": "invalid price_id"
             }
 
 
         plan_data = PRICE_MAP[price_id]
+
 
         set_plan(
             email,
@@ -241,9 +239,7 @@ async def stripe_webhook(request: Request):
         mark_event(event_id)
 
 
-    # -------------------------
-    # RENEWAL
-    # -------------------------
+    # SUBSCRIPTION RENEWAL
     elif event_type == "invoice.paid":
 
         invoice = event["data"]["object"]
@@ -256,13 +252,9 @@ async def stripe_webhook(request: Request):
             "email"
         )
 
-
-        metadata = invoice.get(
-            "metadata",
-            {}
-        )
-
-        plan = metadata.get(
+        plan = (
+            invoice.get("metadata") or {}
+        ).get(
             "plan"
         )
 
@@ -277,9 +269,7 @@ async def stripe_webhook(request: Request):
             mark_event(event_id)
 
 
-    # -------------------------
-    # CANCEL
-    # -------------------------
+    # CANCEL SUBSCRIPTION
     elif event_type == "customer.subscription.deleted":
 
         subscription = event["data"]["object"]
@@ -306,7 +296,6 @@ async def stripe_webhook(request: Request):
     return {
         "ok": True
     }
-
 
 
 # -----------------------------
@@ -336,7 +325,7 @@ async def create_checkout(request: Request):
     if price_id not in PRICE_MAP:
         raise HTTPException(
             status_code=400,
-            detail="invalid price"
+            detail="invalid price_id"
         )
 
 
@@ -344,7 +333,6 @@ async def create_checkout(request: Request):
 
 
     session = stripe.checkout.Session.create(
-
         mode="payment",
 
         payment_method_types=[
@@ -379,7 +367,6 @@ async def create_checkout(request: Request):
     return {
         "url": session.url
     }
-
 
 
 # -----------------------------
