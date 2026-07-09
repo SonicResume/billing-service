@@ -26,3 +26,4 @@ venv/
 # Local DB
 *.sqlite3
 .env
+.env
