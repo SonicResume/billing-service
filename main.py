@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+\from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import stripe
 import os
@@ -236,34 +236,32 @@ async def stripe_webhook(request: Request):
 @app.post("/create-checkout")
 async def create_checkout(request: Request):
 
-
     data = await request.json()
 
-
-    price_id = data.get(
-        "price_id"
-    )
-
-    email = data.get(
-        "email"
-    )
-
+    price_id = data.get("price_id")
+    email = data.get("email")
 
     if not price_id or not email:
-
         raise HTTPException(
             status_code=400,
             detail="missing data"
         )
 
-
     if price_id not in PRICE_MAP:
-
         raise HTTPException(
             status_code=400,
             detail="invalid price"
         )
 
+    success_url = data.get(
+        "success_url",
+        "https://noah-language.vercel.app/success"
+    )
+
+    cancel_url = data.get(
+        "cancel_url",
+        "https://noah-language.vercel.app/pricing"
+    )
 
     session = stripe.checkout.Session.create(
 
@@ -289,18 +287,14 @@ async def create_checkout(request: Request):
         },
 
         success_url=
-        "https://noah-language.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
+        f"{success_url}?session_id={{CHECKOUT_SESSION_ID}}",
 
-        cancel_url=
-        "https://noah-language.vercel.app/pricing"
-
+        cancel_url=cancel_url
     )
-
 
     return {
         "url": session.url
     }
-
 # -----------------------------
 # USER STATUS
 # -----------------------------
