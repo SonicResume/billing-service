@@ -189,7 +189,6 @@ async def stripe_webhook(request: Request):
 
         session = event.data.object
 
-
         email = None
 
         if session.customer_details:
@@ -198,18 +197,22 @@ async def stripe_webhook(request: Request):
         if not email:
             email = session.customer_email
 
+        metadata = session.metadata
 
-         metadata = session.metadata
+        price_id = None
 
-         price_id = None
-
-         if metadata:
-             price_id = metadata["price_id"]
+        if metadata:
+            price_id = metadata["price_id"]
 
         if email and price_id in PRICE_MAP:
 
             plan_data = PRICE_MAP[price_id]
 
+            update_user_plan(
+                email,
+                plan_data["plan"],
+                plan_data["credits"]
+            )
 
             update_user_plan(
                 email,
