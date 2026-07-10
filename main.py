@@ -197,22 +197,24 @@ async def stripe_webhook(request: Request):
         if not email:
             email = session.customer_email
 
+
         metadata = session.metadata
 
         price_id = None
 
         if metadata:
-            price_id = metadata["price_id"]
+            try:
+                price_id = metadata["price_id"]
+            except KeyError:
+                save_event(event_id)
+                return {
+                    "error": "Missing price_id"
+                }
+
 
         if email and price_id in PRICE_MAP:
 
             plan_data = PRICE_MAP[price_id]
-
-            update_user_plan(
-                email,
-                plan_data["plan"],
-                plan_data["credits"]
-            )
 
             update_user_plan(
                 email,
@@ -227,6 +229,7 @@ async def stripe_webhook(request: Request):
     return {
         "ok": True
     }
+
 # -----------------------------
 # CREATE CHECKOUT
 # -----------------------------
@@ -281,9 +284,9 @@ async def create_checkout(request: Request):
 
         metadata={
             "price_id": price_id,
-            "plan": PRICE_MAP[price_id]["plan"]
-        },
-
+            "plan": PRICE_MAP[price_id]["plan"],
+            "email": email
+        }
 
         success_url=
         "https://noah-language.vercel.app/success",
