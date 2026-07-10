@@ -1,4 +1,4 @@
-\from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import stripe
 import os
