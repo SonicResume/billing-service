@@ -255,12 +255,12 @@ async def create_checkout(request: Request):
 
     success_url = data.get(
         "success_url",
-        "https://noah-language.vercel.app/success"
+        "https://language.sonicresume.com/success"
     )
 
     cancel_url = data.get(
         "cancel_url",
-        "https://noah-language.vercel.app/pricing"
+        "https://language.sonicresume.com/pricing"
     )
 
     session = stripe.checkout.Session.create(
