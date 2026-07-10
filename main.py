@@ -286,7 +286,7 @@ async def create_checkout(request: Request):
             "price_id": price_id,
             "plan": PRICE_MAP[price_id]["plan"],
             "email": email
-        }
+        },
 
         success_url=
         "https://noah-language.vercel.app/success",
