@@ -289,7 +289,7 @@ async def create_checkout(request: Request):
         },
 
         success_url=
-        "https://noah-language.vercel.app/success",
+        "https://noah-language.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
 
         cancel_url=
         "https://noah-language.vercel.app/pricing"
@@ -329,3 +329,59 @@ def user_status(email: str):
         "credits": 0
 
     }
+
+# -----------------------------
+# VERIFY PAYMENT
+# -----------------------------
+@app.get("/verify-payment")
+def verify_payment(session_id: str):
+
+    try:
+        session = stripe.checkout.Session.retrieve(
+            session_id
+        )
+
+        if session.payment_status == "paid":
+
+            email = None
+
+            if session.customer_details:
+                email = session.customer_details.email
+
+            if not email:
+                email = session.customer_email
+
+
+            metadata = session.metadata
+
+            price_id = metadata.get("price_id")
+
+            if email and price_id in PRICE_MAP:
+
+                plan_data = PRICE_MAP[price_id]
+
+                update_user_plan(
+                    email,
+                    plan_data["plan"],
+                    plan_data["credits"]
+                )
+
+
+            return {
+                "success": True,
+                "message": "Payment verified"
+            }
+
+
+        return {
+            "success": False,
+            "message": "Payment not completed"
+        }
+
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "message": str(e)
+        }
