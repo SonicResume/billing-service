@@ -256,11 +256,13 @@ async def create_checkout(request: Request):
     success_url = data.get(
         "success_url",
         "https://language.sonicresume.com/success"
+        "https://legal.sonicresume.com/success"
     )
 
     cancel_url = data.get(
         "cancel_url",
         "https://language.sonicresume.com/pricing"
+        "https://legal.sonicresume.com/pricing"
     )
 
     session = stripe.checkout.Session.create(
